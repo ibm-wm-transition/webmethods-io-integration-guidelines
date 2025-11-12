@@ -73,6 +73,7 @@
 * **Do** make sure your pipeline at the last step matches the output - specifically take note of arrays/document lists.  If you're returning a list with a single item, this should still be a list and not a single item, and could cause other issues with subsequent steps/calls.
 * **Do** if you use while/do or do/until loops, make sure they have a condition to exit that will fire.  Without this the FlowService will run for 6 hours before it times out (which equals 7200 transactions!).  You can use CurrentNanoTime to make a time restricted loop, if required, to catch any accidental runs over a certain time period
 * **Do** remember FlowServices can be recursive for complex requirements, but take care not to create a stack overflow error.
+* **Do** use resources wisely. This includes logging functions like {{logCustomMessage()}}. Logging consumes **database and disk space** and uses **connections**, which can be exhausted in worst-case scenarios. If you have **no need or plan** to analyze the logs, **avoid logging**. When logging is necessary, use it **conditionally**, for example: Inside {{try/catch}} blocks or Controlled by a flag such as {{DebugFlag = true}}
 
 ### 5.2.4 FlowService Samples
 
