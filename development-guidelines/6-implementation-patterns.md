@@ -72,3 +72,269 @@ You can use a combination of a [JSON Customizer](https://docs.webmethods.io/inte
 ## **6.4 Workflow - Parallel Processing**
 
 Workflows do not have to be sequential - they can have parallel execution threads allowing more than one action to run concurrently.  Be cautious using these and remain conscious of error handling in these scenarios.
+
+## **6.5 Workflow Exception Processing & Fallout Management**
+
+Many integrations focus only on the happy-path execution flow. In practice, integrations must also handle technical failures, business exceptions, data quality issues, and operational recovery.
+
+A common anti-pattern is to rely solely on workflow execution logs for troubleshooting. Once a workflow execution completes, the operational context may be difficult to recover, forcing support teams to investigate historical logs.
+
+A recommended implementation pattern is to use Workflow Stores together with Global Error Handlers and Scheduled Workflows to create a lightweight exception-processing framework.
+
+### Why use this pattern?
+
+This pattern provides:
+
+- Durable exception handling
+- Recovery of transient failures
+- Business fallout processing
+- Operational visibility
+- Separation of transaction processing and exception processing
+- Reduced support effort
+
+The pattern can be implemented entirely within IBM webMethods Integration without requiring external technologies such as:
+
+- IBM MQ
+- Apache Kafka
+- RabbitMQ
+- Custom databases
+
+### Workflow Stores Overview
+
+IBM webMethods Integration provides three store types:
+
+| Store | Scope | Typical Usage |
+|---------|---------|---------|
+| Memory Store | Single workflow execution | Temporary runtime variables |
+| Flow Store | All executions of the same workflow | Checkpoints, cursors, pagination state |
+| Account Store | Tenant-wide | Shared exception queue, shared configuration, operational data |
+
+For exception processing and fallout management, Account Store is the recommended store because it can be accessed by multiple workflows.
+
+### Technical Failures vs Business Fallout
+
+Not all issues should be treated equally.
+
+#### Technical Failure
+
+A technical failure is typically caused by infrastructure or connectivity issues.
+
+Examples:
+
+- Connection reset
+- Connection refused
+- Read timeout
+- HTTP 502
+- HTTP 503
+- HTTP 504
+
+These failures are often retryable.
+
+#### Business Fallout
+
+A business fallout condition occurs when the workflow executes successfully but the transaction cannot continue.
+
+Examples:
+
+- Customer not found
+- Approval required
+- Missing mandatory field
+- Duplicate transaction
+- Unknown product code
+- Data validation failure
+
+Business fallout does not necessarily trigger a Global Error Handler.
+
+The workflow may intentionally create a fallout record and then terminate successfully.
+
+### Recommended Architecture
+
+```text
+Business Workflow
+        │
+        ▼
+ Validation
+        │
+ ┌──────┼──────┐
+ │      │      │
+ ▼      ▼      ▼
+
+Success Fallout Technical Error
+ │        │         │
+ │        ▼         ▼
+ │   Account     Global Error
+ │    Store       Handler
+ │                  │
+ │                  ▼
+ │           Error Classification
+ │                  │
+ └──────────► Account Store
+                     │
+                     ▼
+          Scheduled Recovery Workflow
+                     │
+         ┌───────────┼───────────┐
+         │           │           │
+         ▼           ▼           ▼
+       Retry      Notify     Escalate
+```
+
+### Global Error Handler Pattern
+
+A Global Error Handler should classify exceptions before deciding what action to take.
+
+Example classification logic:
+
+```text
+HTTP 401  → Investigation
+HTTP 404  → Business Fallout
+HTTP 502  → Retry
+HTTP 503  → Retry
+HTTP 504  → Retry
+Timeout   → Retry
+```
+
+Using a CASE/SWITCH construct helps maintain a centralized classification strategy.
+
+### Retry Pattern
+
+Transient failures should normally be retried.
+
+Examples:
+
+- Read timeout
+- Connection reset
+- HTTP 502
+- HTTP 503
+- HTTP 504
+
+Recommended process:
+
+```text
+Failure
+   │
+   ▼
+Store Retry Record
+   │
+   ▼
+Scheduled Workflow
+   │
+   ▼
+Retry Transaction
+   │
+   ├── Success → Close Record
+   │
+   └── Failure
+           │
+           ▼
+    Increment Retry Count
+```
+
+After a configurable threshold is reached:
+
+```text
+Retry Count >= Threshold
+        │
+        ▼
+     Escalate
+```
+
+### Investigation Pattern
+
+Some failures are unlikely to succeed through retries.
+
+Examples:
+
+- HTTP 401 Unauthorized
+- Invalid credentials
+- Expired OAuth token
+- Invalid certificate
+
+Recommended action:
+
+```text
+Store Investigation Record
+            │
+            ▼
+      Notify Support
+```
+
+### Business Fallout Pattern
+
+A workflow can intentionally create fallout records even when no technical error has occurred.
+
+Example:
+
+```text
+Customer Lookup
+        │
+        ▼
+ Customer Missing
+        │
+        ▼
+ Create Fallout Record
+        │
+        ▼
+     Complete
+```
+
+The workflow execution itself succeeds.
+
+The unresolved business condition is handled later by a separate workflow or support process.
+
+### Example Fallout Record
+
+```json
+{
+  "id": "ORD-2026-4711",
+  "recordType": "BusinessFallout",
+  "workflow": "SAP_Order_Integration",
+  "category": "MissingCustomer",
+  "reason": "Customer does not exist in SAP",
+  "status": "Open",
+  "retryEligible": false,
+  "assignedQueue": "MasterDataTeam",
+  "created": "2026-11-27T10:15:23Z"
+}
+```
+
+### Example Retry Record
+
+```json
+{
+  "id": "ORD-2026-4711",
+  "recordType": "TechnicalException",
+  "workflow": "SAP_Order_Integration",
+  "exceptionType": "ReadTimeout",
+  "retryEligible": true,
+  "retryCount": 2,
+  "maxRetries": 5,
+  "status": "PendingRetry",
+  "created": "2026-11-27T10:15:23Z"
+}
+```
+
+### Recommended Operational Metrics
+
+Consider generating regular reports for:
+
+- Open Fallout Records
+- Retry Queue Depth
+- Escalated Transactions
+- Average Record Age
+- Mean Time To Resolution (MTTR)
+
+These metrics provide operational visibility and help identify recurring integration issues.
+
+### Summary
+
+Workflow Stores can be used as a lightweight exception-processing framework that allows workflows to:
+
+- Persist technical exceptions
+- Persist business fallout
+- Recover transient failures
+- Escalate repeated failures
+- Share operational data between workflows
+- Improve supportability and operational visibility
+
+This pattern is particularly useful when implementing resilient integrations that require durable exception handling without introducing additional messaging platforms or custom persistence layers.
